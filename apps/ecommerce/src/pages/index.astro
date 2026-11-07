@@ -1,0 +1,134 @@
+---
+// apps/ecommerce/src/pages/index.astro
+const title = "Bienvenidos a NextCollege";
+---
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --card: #131b2e;
+      --border: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #2563eb;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      text-align: center;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(37, 99, 235, 0.1);
+      border: 1px solid rgba(37, 99, 235, 0.3);
+      color: #38bdf8;
+      padding: 0.4rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+    }
+    h1 {
+      font-size: 3.5rem;
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 1.25rem;
+      background: linear-gradient(135deg, #ffffff 40%, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    p {
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      max-width: 600px;
+      margin-bottom: 2.5rem;
+      line-height: 1.6;
+    }
+    .nav-cards {
+      display: flex;
+      gap: 1.25rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 700px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 1.25rem 1.75rem;
+      border-radius: 1rem;
+      text-decoration: none;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: all 0.2s;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: var(--primary);
+      box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+    }
+    footer {
+      margin-top: 4rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="badge">🚀 Scaffold Base &bull; MasterClass CI/CD</div>
+  <h1>Bienvenidos a NextCollege</h1>
+  <p>
+    Plataforma base lista para desarrollo acelerado con Inteligencia Artificial y Entrega Continua en Dokploy.
+  </p>
+
+  <div class="nav-cards">
+    <a href="/app" class="card">
+      <span style="font-size: 1.5rem;">📱</span>
+      <div style="text-align: left;">
+        <div>Ver PWA Mobile</div>
+        <small style="color: var(--text-muted); font-size: 0.75rem;">/app</small>
+      </div>
+    </a>
+    <a href="/admin" class="card">
+      <span style="font-size: 1.5rem;">⚙️</span>
+      <div style="text-align: left;">
+        <div>Panel Administrativo</div>
+        <small style="color: var(--text-muted); font-size: 0.75rem;">/admin</small>
+      </div>
+    </a>
+    <a href="/api/health" class="card">
+      <span style="font-size: 1.5rem;">🩺</span>
+      <div style="text-align: left;">
+        <div>Health Check API</div>
+        <small style="color: var(--text-muted); font-size: 0.75rem;">/api/health</small>
+      </div>
+    </a>
+  </div>
+
+  <footer>
+    NextCollege Scaffold &bull; Astro + React + Node.js + MySQL + Dokploy
+  </footer>
+</body>
+</html>

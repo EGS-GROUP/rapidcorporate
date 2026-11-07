@@ -1,0 +1,29 @@
+{
+  "name": "nextcollege-masterclass-scaffold",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scaffold profesional y Template Repository para webinars y masterclasses: E-commerce (Astro), PWA (React), Admin Dashboard (React), Node.js API y MySQL con CI/CD automatizado en Dokploy.",
+  "scripts": {
+    "install:all": "npm install --prefix apps/ecommerce && npm install --prefix apps/pwa && npm install --prefix apps/admin && npm install --prefix server",
+    "build:ecommerce": "npm run build --prefix apps/ecommerce",
+    "build:pwa": "npm run build --prefix apps/pwa",
+    "build:admin": "npm run build --prefix apps/admin",
+    "build:all": "npm run build:ecommerce && npm run build:pwa && npm run build:admin && node -e \"const fs=require('fs'); fs.mkdirSync('server/public', {recursive:true}); fs.cpSync('apps/ecommerce/dist', 'server/public/ecommerce', {recursive:true}); fs.cpSync('apps/pwa/dist', 'server/public/pwa', {recursive:true}); fs.cpSync('apps/admin/dist', 'server/public/admin', {recursive:true}); console.log('✅ Artefactos sincronizados en server/public');\"",
+    "server": "node server/src/app.js",
+    "start": "node server/src/app.js"
+  },
+  "keywords": [
+    "template-repository",
+    "scaffold",
+    "masterclass",
+    "dokploy",
+    "cicd",
+    "astro",
+    "react",
+    "pwa",
+    "nodejs",
+    "mysql"
+  ],
+  "author": "Pablo Valdivia",
+  "license": "MIT"
+}
