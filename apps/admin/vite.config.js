@@ -4,5 +4,13 @@ import react from '@vitejs/plugin-react';
 // Crucial: base must match the subroute where Express serves the admin dashboard
 export default defineConfig({
   plugins: [react()],
-  base: '/admin/'
+  base: '/admin/',
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      }
+    }
+  }
 });

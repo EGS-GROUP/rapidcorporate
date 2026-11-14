@@ -131,4 +131,47 @@ router.get('/debug-network', async (req, res) => {
   });
 });
 
+// Local proxy for iDempiere REST API to bypass browser CORS in development/production
+router.all('/idempiere-proxy', async (req, res) => {
+  const target = req.query.target;
+  if (!target) {
+    return res.status(400).json({ error: 'Falta parámetro ?target=' });
+  }
+
+  try {
+    const forwardHeaders = {
+      'Content-Type': req.headers['content-type'] || 'application/json',
+      'Accept': req.headers['accept'] || 'application/json'
+    };
+    if (req.headers['authorization']) {
+      forwardHeaders['Authorization'] = req.headers['authorization'];
+    }
+
+    const fetchOptions = {
+      method: req.method,
+      headers: forwardHeaders
+    };
+
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body && Object.keys(req.body).length > 0) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+
+    const idempiereRes = await fetch(target, fetchOptions);
+    const contentType = idempiereRes.headers.get('content-type') || '';
+
+    res.status(idempiereRes.status);
+    if (contentType.includes('application/json')) {
+      const data = await idempiereRes.json();
+      res.json(data);
+    } else {
+      const text = await idempiereRes.text();
+      res.send(text);
+    }
+  } catch (error) {
+    res.status(502).json({
+      error: `Error en Proxy Local hacia iDempiere (${target}): ${error.message}`
+    });
+  }
+});
+
 module.exports = router;
