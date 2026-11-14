@@ -7,8 +7,8 @@
     "start": "node src/app.js"
   },
   "dependencies": {
+    "better-sqlite3": "^13.1.1",
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "mysql2": "^3.10.1"
+    "express": "^4.19.2"
   }
 }

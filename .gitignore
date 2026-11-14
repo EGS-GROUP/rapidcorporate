@@ -8,3 +8,5 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .astro/
+server/data/*.sqlite-shm
+server/data/*.sqlite-wal

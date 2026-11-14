@@ -1,6 +1,6 @@
 # 🏗️ ARCHITECTURE.md — Arquitectura de Software de RapidCorporate
 
-Este documento describe la arquitectura técnica, los componentes clave, los patrones de diseño y las decisiones de infraestructura de la plataforma **RapidCorporate**.
+Este documento describe la arquitectura técnica, los componentes clave, los patrones de persistencia, la integración con el ERP iDempiere y las decisiones de infraestructura de la plataforma **RapidCorporate**.
 
 ---
 
@@ -10,24 +10,24 @@ Este documento describe la arquitectura técnica, los componentes clave, los pat
 
 1. **E-commerce público de alta velocidad**: Generación estática optimizada con Astro.
 2. **PWA Mobile**: Aplicación web progresiva orientada a usuarios móviles con soporte offline (React + Vite).
-3. **Panel Administrativo (Backoffice)**: Single Page Application para gestión de inventario y estado operativo (React + Vite).
-4. **Backend API & Servidor de Contenidos**: Servicio Express unificado que maneja la persistencia y sirve las 3 interfaces.
+3. **Panel Administrativo (Backoffice)**: Single Page Application para gestión de inventario, sincronización de catálogos ERP y administración de clientes (React + Vite).
+4. **Backend API & Servidor de Contenidos**: Servicio Express unificado que maneja la persistencia y sirve las 3 interfaces simultáneamente bajo el puerto `3000`.
 
 ```mermaid
 graph TD
     Client[Cliente / Navegador / Dispositivo Móvil] -->|HTTP / HTTPS:3000| Express[Express Server Runtime / Node.js]
     
     subgraph "Routing & Delivery Layer"
-        Express -->|GET /api/*| APIRoutes["REST API Endpoints (/api/products, /api/health)"]
+        Express -->|GET /api/*| APIRoutes["REST API Endpoints (/api/products, /api/sync/*)"]
+        Express -->|ALL /api/idempiere-proxy| ProxyRoute["ERP Reverse Proxy (Anti-CORS)"]
         Express -->|GET /admin/*| AdminSPA["Panel Admin (React SPA)"]
         Express -->|GET /app/*| PwaSPA["PWA Mobile (React + SW)"]
         Express -->|GET /*| AstroSSG["E-commerce (Astro Static)"]
     end
 
-    subgraph "Data Persistence & Resilience"
-        APIRoutes --> DBBridge["Database Manager (db.js)"]
-        DBBridge -->|Primario| MySQL[("MySQL Database")]
-        DBBridge -->|Fallback In-Memory| MemStore[("In-Memory Product Catalog")]
+    subgraph "Data Persistence Layer"
+        APIRoutes --> SQLite[("SQLite Production Database (better-sqlite3 / WAL Mode)")]
+        ProxyRoute --> IDempiere["iDempiere ERP REST API (test.idempiere.org:443)"]
     end
 ```
 
@@ -52,99 +52,83 @@ graph TD
 ### 2.3. Frontend: Panel de Control Administrativo (`apps/admin`)
 - **Framework**: React 18 + Vite.
 - **Ruta Servida**: `/admin` (con `base: '/admin/'` en Vite).
-- **Propósito**: Gestión administrativa, monitorización del estado de conexión a la base de datos (MySQL vs Memoria) y administración de productos.
+- **Propósito**: Gestión administrativa integral:
+  - Autenticación en 1 Paso o 2 Pasos con iDempiere ERP.
+  - Mantenimiento completo (CRUD) de Categorías de Productos, Productos, Listas y Precios, Categorías de Clientes y Clientes.
+  - Visualización en **Solo Lectura** del Catálogo de Impuestos (`C_Tax`).
+  - Monitor de estado de base de datos SQLite y auditoría de sincronizaciones (`sync_logs`).
 
 ### 2.4. Backend: API y Servidor de Entrega (`server`)
-- **Tecnología**: Node.js + Express + `mysql2/promise`.
+- **Tecnología**: Node.js + Express + `better-sqlite3`.
 - **Responsabilidades**:
   - Proveer API REST en `/api/*`.
   - Servir los artefactos estáticos compilados ubicados en `server/public/{ecommerce,pwa,admin}`.
   - Enrutamiento SPA con fallback (`res.sendFile(index.html)`) para `/admin/*` y `/app/*`.
-  - Pantallas informativas de diagnóstico en caso de que algún frontend no haya sido compilado aún.
+  - Endpoint de Proxy Server-to-Server `/api/idempiere-proxy` para mitigación 100% efectiva de restricciones CORS con ERP iDempiere.
 
 ---
 
-## 💾 3. Patrón de Resiliencia de Datos (Dual-Mode Data Bridge)
+## 💾 3. Capa de Persistencia: SQLite de Producción (`better-sqlite3`)
 
-Uno de los principales retos en despliegues automatizados (CI/CD en Dokploy) y talleres en vivo es la disponibilidad inmediata de bases de datos. Para evitar que caídas de red o demoras en el aprovisionamiento de MySQL bloqueen el arranque de la aplicación, el módulo [`server/src/db.js`](file:///d:/BDeveloper/rapidcorporate/server/src/db.js) opera bajo un patrón de **Tolerancia a Fallos en Cascada**:
+Se ha descartado el uso de MySQL en favor de **SQLite** como motor de datos unificado para producción y desarrollo:
 
-```mermaid
-flowchart TD
-    Init[Inicio initDB] --> CheckEnv{¿Variables de entorno DB presentes?}
-    CheckEnv -- No --> MemMode[Activar Modo In-Memory con Semilla Inicial]
-    CheckEnv -- Sí --> ConnectMySQL[Intentar conexión con MySQL Pool]
-    ConnectMySQL -- Éxito --> CreateTables[Verificar / Crear Tablas y Poblar Semilla]
-    CreateTables --> MySQLReady[Estado: MySQL Activo]
-    ConnectMySQL -- Error/Timeout --> FallbackMem[Activar Modo In-Memory Fallback]
-    FallbackMem --> MemReady[Estado: In-Memory Operativo]
-```
+1. **Rendimiento y Modo WAL**: Se configura con `journal_mode = WAL` (Write-Ahead Logging) y `synchronous = NORMAL`, permitiendo lecturas concurrentes sin bloqueo y escrituras atómicas de alta velocidad.
+2. **Integridad Referencial**: Se activa `PRAGMA foreign_keys = ON;` para asegurar relaciones válidas entre productos, categorías, versiones de listas y clientes.
+3. **Cero Dependencia de Red**: Elimina los problemas de resolución DNS, credenciales expiradas o latencia de red típicos de servidores de base de datos separados.
+4. **Almacenamiento Persistente en Docker/Dokploy**: El archivo reside en `server/data/database.sqlite`, fácilmente mapeable como un volumen Docker (`-v /data/sqlite:/app/server/data`).
 
-### Endpoints de Diagnóstico y Proxy:
-- **`GET /api/health`**: Expone el modo de operación (`mysql` o `in-memory`), el host configurado, uptime y estado de salud.
-- **`GET /api/debug-network`**: Herramienta de introspección para contenedores Docker que verifica resolución DNS interna e inspecciona puertos TCP 3306 en subredes Docker (`172.17.x.x` y `172.18.x.x`).
-- **`ALL /api/idempiere-proxy?target=`**: Proxy inverso interno que reenvía peticiones REST HTTP/JSON directamente desde Node.js hacia iDempiere ERP (o cualquier servicio externo), eliminando restricciones CORS del navegador sin depender de terceros.
+### Catálogos y Tablas en SQLite:
+| Tabla | Modelo ERP Mapeado | Mantenimiento Local (CRUD) | Descripción |
+| :--- | :--- | :---: | :--- |
+| `products` | `M_Product` | ✅ Sí | Catálogo de productos con SKU, precio, stock, imagen |
+| `product_categories` | `M_Product_Category` | ✅ Sí | Clasificación de artículos de la tienda |
+| `price_lists` | `M_PriceList` | ✅ Sí | Listas de precios por divisa |
+| `price_list_versions`| `M_PriceList_Version` | ✅ Sí | Versiones con vigencia temporal |
+| `product_prices` | `M_ProductPrice` | ✅ Sí | Precios estándar, de lista y límite por producto |
+| `customer_categories`| `C_BP_Group` | ✅ Sí | Grupos y clasificación de socios de negocio |
+| `customers` | `C_BPartner` | ✅ Sí | Clientes y proveedores con RUC/TaxID, contacto |
+| `taxes` | `C_Tax` | 🔒 **Solo Lectura** | Tasas fiscales maestras sincronizadas desde ERP |
+| `sync_logs` | *Nativo Auditoría* | Auditoría | Trazabilidad de transacciones de sincronización |
 
 ---
 
-## 🌐 4. Arquitectura de Bypass CORS Multi-Modo (Integración ERP)
+## 🔐 4. Arquitectura de Autenticación con iDempiere ERP (1 y 2 Pasos)
 
-El navegador impone la política del mismo origen (Same-Origin Policy). Cuando la SPA de administración realiza peticiones a `test.idempiere.org:443`, el navegador bloquea la respuesta a menos que exista un mecanismo de intermediación:
+La plataforma implementa las dos variantes oficiales de autenticación con el API REST de iDempiere:
+
+### Flujo en 2 Pasos (Asistido por Contexto)
+1. **Paso 1 (Credenciales Básicas)**: El usuario introduce `userName` y `password`. El frontend envía `POST /api/v1/auth/tokens`. iDempiere valida y retorna un token temporal JWT (`tempToken`) y la lista de empresas asociadas (`clients`).
+2. **Cascada de Selección**:
+   - `GET /api/v1/auth/roles?client={clientId}` (con Bearer tempToken).
+   - `GET /api/v1/auth/organizations?client={clientId}&role={roleId}`.
+   - `GET /api/v1/auth/warehouses?client={clientId}&role={roleId}&organization={organizationId}`.
+3. **Paso 2 (Confirmación Final)**: Se envía `PUT /api/v1/auth/tokens` con el cuerpo plano `{ clientId, roleId, organizationId, warehouseId, language }`. iDempiere devuelve el token JWT final operativo de sesión.
+
+### Flujo en 1 Paso (Directo)
+Envía directamente `POST /api/v1/auth/tokens` con un objeto que incluye las credenciales y el bloque anidado `parameters` con los IDs de cliente, rol, organización y almacén preconfigurados.
+
+---
+
+## 🌐 5. Mitigación de CORS mediante Proxy Local Server-to-Server
+
+Debido a que `corsproxy.io` ahora rechaza URLs anónimas con error HTTP 403 (`keyless_legacy_url`), la plataforma utiliza por defecto el endpoint interno de Express:
 
 ```mermaid
 flowchart LR
-    Browser["Navegador (Panel Admin)"] -->|1. POST /api/idempiere-proxy?target=...| NodeProxy["Express Backend (/api/idempiere-proxy)"]
-    NodeProxy -->|2. HTTP Request (Server-to-Server)| IDempiere["iDempiere REST API v1\n(test.idempiere.org:443)"]
-    IDempiere -->|3. JSON Response + Bearer Token| NodeProxy
-    NodeProxy -->|4. JSON Response (Same Origin / 200 OK)| Browser
+    Browser["Panel Admin (React)"] -->|1. Fetch /api/idempiere-proxy?target=...| Express["Node.js Express Proxy (/api/idempiere-proxy)"]
+    Express -->|2. Server-to-Server HTTPS| ERP["iDempiere ERP (test.idempiere.org:443)"]
+    ERP -->|3. JSON Payload| Express
+    Express -->|4. Response (Same-Origin)| Browser
 ```
 
-### Modos Soportados en el Frontend:
-1. **`local` (Opción 2 - Por Defecto y Recomendado)**: Pasa a través del endpoint `/api/idempiere-proxy` en Node.js. Cero latencias externas, sin dependencia de API keys y 100% de disponibilidad.
-2. **`none` (Opción 1 - Directo)**: Conexión directa contra la URL de iDempiere sin intermediarios.
-3. **`allorigins` (Opción 3 - Alternativa Pública)**: Utiliza `https://api.allorigins.win/raw?url=` como proxy público de respaldo.
-4. **`corsproxy` (Opción 4 - Con Key)**: `https://corsproxy.io/?key=...`. Si se intenta invocar sin clave, el cliente conmuta automáticamente a `local` para prevenir el error `403 keyless_legacy_url`.
+Esta solución es 100% independiente de servicios de proxy externos, eliminando bloqueos de CORS y fallos por cuotas de terceros.
 
 ---
 
-## 🚢 5. Pipeline de Contenedorización (Docker Multi-Stage)
+## 🚀 6. Despliegue en Dokploy vía Docker Multi-Stage
 
-El [`Dockerfile`](file:///d:/BDeveloper/rapidcorporate/Dockerfile) está estructurado en 4 etapas para minimizar el tamaño de la imagen final y garantizar compilaciones herméticas:
-
-```mermaid
-flowchart LR
-    subgraph Build Phase
-        B1["Etapa 1: builder-ecommerce\n(Astro Build)"]
-        B2["Etapa 2: builder-pwa\n(Vite Build)"]
-        B3["Etapa 3: builder-admin\n(Vite Build)"]
-    end
-    
-    subgraph Final Image
-        Runner["Etapa 4: runner (node:20-alpine)\n- Dependencias prod server\n- Copia de dists hacia server/public/\n- Ejecución app.js"]
-    end
-    
-    B1 --> Runner
-    B2 --> Runner
-    B3 --> Runner
-```
-
-### Ventajas de este Enfoque:
-- **Sin herramientas de build en producción**: Node.js, Astro y Vite no residen en el runtime final.
-- **Cero dependencias cruzadas**: Cada frontend gestiona sus propias dependencias sin colisionar en versiones.
-- **Un solo puerto expuesto**: Dokploy solo necesita mapear el puerto `3000` con un único certificado SSL Traefik.
-
----
-
-## 📐 6. Reglas y Convenciones de Arquitectura
-
-1. **Aislamiento de Frontends**: Cada aplicación en `apps/` es independiente y se compila a su propio directorio `dist/`.
-2. **Subrutas Absolutas en Vite**: Las configuraciones de `base` en `vite.config.js` deben coincidir estrictamente con el prefijo montado por Express (`/admin/` y `/app/`).
-3. **Consistencia de Modelos**: Toda modificación en los atributos de productos (`id`, `name`, `category`, `price`, `stock`, `image`, `description`) debe reflejarse en:
-   - Esquema DDL en `db.js`.
-   - Array `INITIAL_PRODUCTS` en `db.js`.
-   - Tipos o vistas en los frontends (`apps/ecommerce`, `apps/pwa`, `apps/admin`).
-4. **Idempotencia en Base de Datos**: Los scripts de inicialización usan `CREATE TABLE IF NOT EXISTS` y si la tabla está vacía, se realiza un sembrado inicial sin duplicar datos.
-
----
-
-*Documento de Arquitectura — Noviembre 2026 (Actualizado con Módulo de Proxying Local y Mitigación CORS)*
-
+El archivo [`Dockerfile`](file:///d:/BDeveloper/rapidcorporate/Dockerfile) ejecuta una compilación optimizada en 4 etapas:
+- **Etapa 1**: Compilación de Astro hacia `apps/ecommerce/dist`.
+- **Etapa 2**: Compilación de PWA hacia `apps/pwa/dist`.
+- **Etapa 3**: Compilación de Admin hacia `apps/admin/dist`.
+- **Etapa 4**: Imagen base `node:20-alpine` con `python3 make g++` (para compilar las extensiones nativas C++ de `better-sqlite3`), dependencias de producción de `server`, copia de artefactos a `server/public/*` e inicio del servicio en el puerto `3000`.

@@ -127,4 +127,8 @@ async function start() {
   });
 }
 
-start();
+if (require.main === module) {
+  start();
+}
+
+module.exports = app;

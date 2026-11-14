@@ -35,13 +35,16 @@ COPY apps/admin/ ./
 RUN npm run build
 
 # ========================================================
-# ETAPA 4: Runtime Final (Node.js API + Servidor Unificado)
+# ETAPA 4: Runtime Final (Node.js API + Servidor Unificado con SQLite)
 # ========================================================
 FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
+
+# Herramientas de compilación requeridas para módulos nativos (better-sqlite3) en Alpine
+RUN apk add --no-cache python3 make g++
 
 # 1. Instalar dependencias del servidor backend
 COPY server/package*.json ./server/

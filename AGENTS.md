@@ -10,7 +10,7 @@
 - **Nombre del Proyecto**: `rapidcorporate` (NextCollege Rapid Platform Scaffold)
 - **Autor / Propietario**: Pablo Valdivia (Pabloksy)
 - **Objetivo**: Monorepo unificado fullstack preparado para desarrollo ágil, demostraciones en vivo (masterclasses/webinars) y despliegue automatizado en **Dokploy** vía Docker multi-stage.
-- **Modelo de Entrega**: **Single Port Monolith** (puerto único `3000` por defecto). Un solo proceso Node.js/Express expone la API REST y sirve simultáneamente las tres aplicaciones frontend compiladas.
+- **Modelo de Entrega**: **Single Port Monolith** (puerto único `3000` por defecto). Un solo proceso Node.js/Express expone la API REST, sincroniza con ERP iDempiere y sirve simultáneamente las tres aplicaciones frontend compiladas.
 
 ---
 
@@ -20,20 +20,25 @@
 rapidcorporate/
 ├── apps/
 │   ├── admin/             # Panel Administrativo (React 18 + Vite) -> Servido en /admin
+│   │   └── src/
+│   │       ├── components/# Vistas de gestión: Productos, Categorías, Precios, Clientes, Impuestos, etc.
+│   │       └── services/  # authService.js (1 y 2 pasos) e idempiereSyncService.js
 │   ├── ecommerce/         # Portal Web / Tienda (Astro 4)          -> Servido en /
 │   └── pwa/               # Aplicación Móvil PWA (React 18 + Vite) -> Servido en /app
 ├── server/
-│   ├── public/            # Destino de compilación (ignorado en git, generado en build)
+│   ├── data/
+│   │   └── database.sqlite# Base de datos SQLite de producción (modo WAL)
+│   ├── public/            # Destino de compilación (generado con npm run build:all)
 │   │   ├── admin/
 │   │   ├── ecommerce/
 │   │   └── pwa/
 │   ├── src/
 │   │   ├── app.js         # Entrypoint Express, enrutador estático y fallback SPA
-│   │   ├── db.js          # Capa de datos dual (MySQL Pool + Mock In-Memory)
+│   │   ├── db.js          # Capa de datos SQLite (better-sqlite3) con tablas y CRUD
 │   │   └── routes/
-│   │       └── api.js     # Endpoints REST (/api/health, /api/products, etc.)
-│   └── package.json       # Dependencias exclusivas del backend (express, cors, mysql2)
-├── Dockerfile             # Multi-stage build (4 etapas) optimizado para Dokploy
+│   │       └── api.js     # Endpoints REST (/api/health, catálogos, /api/sync/*, /api/idempiere-proxy)
+│   └── package.json       # Dependencias exclusivas backend (express, cors, better-sqlite3)
+├── Dockerfile             # Multi-stage build (4 etapas) con dependencias nativas para Dokploy
 ├── package.json           # Scripts de orquestación raíz del monorepo
 ├── AGENTS.md              # [ESTE ARCHIVO] Protocolo operativo para Agentes IA
 ├── ARCHITECTURE.md        # Documento detallado de diseño y arquitectura de software
@@ -49,13 +54,52 @@ rapidcorporate/
 | **E-commerce** | Astro 4 (Static SSG) | `/` (raíz) | `astro.config.mjs` (`format: 'directory'`) |
 | **PWA Mobile** | React 18 + Vite | `/app` | `base: '/app/'` en `vite.config.js` |
 | **Panel Admin** | React 18 + Vite | `/admin` | `base: '/admin/'` en `vite.config.js` |
-| **API Backend** | Node.js + Express | `/api/*` | Endpoints JSON REST |
+| **API Backend** | Node.js + Express | `/api/*` | Endpoints JSON REST (CRUD de 6 catálogos) |
 | **Proxy ERP Local** | Express | `/api/idempiere-proxy?target=` | Bypass CORS server-to-server para iDempiere REST |
+| **Sincronización ERP** | Express | `/api/sync/:catalog` | Bulk Upsert de registros traídos de iDempiere |
+| **Auditoría de Sync** | Express | `/api/sync/logs` | Trazabilidad histórica de sincronizaciones |
 | **Health Check** | Express | `/api/health` | Utilizado por Dokploy / Docker health checks |
 
 ---
 
-## ⚙️ 4. Comandos y Ciclos de Trabajo
+## 💾 4. Capa de Datos: SQLite de Producción (`better-sqlite3`)
+
+Se ha descartado completamente el uso de MySQL. La plataforma utiliza **SQLite** para todos los entornos:
+
+1. **Configuración de Alto Rendimiento**: Opera con `WAL` (Write-Ahead Logging) y `synchronous = NORMAL` para soportar alta concurrencia de lecturas y escrituras sin bloqueo de base de datos.
+2. **Relaciones e Integridad Referencial**: Activa `PRAGMA foreign_keys = ON;`.
+3. **Catálogos Implementados**:
+   - `product_categories` (con mantenimiento en app)
+   - `products` (con mantenimiento en app)
+   - `price_lists`, `price_list_versions`, `product_prices` (con mantenimiento en app)
+   - `customer_categories` (con mantenimiento en app)
+   - `customers` (con mantenimiento en app)
+   - `taxes` (🔒 **Estrictamente Solo Lectura**, sincronizado desde `C_Tax` de iDempiere)
+   - `sync_logs` (tabla de auditoría y trazabilidad)
+
+---
+
+## 🔐 5. Autenticación con iDempiere ERP (1 y 2 Pasos)
+
+El servicio `apps/admin/src/services/authService.js` soporta:
+
+1. **Login Asistido en 2 Pasos (Oficial iDempiere)**:
+   - **Paso 1**: `POST /api/v1/auth/tokens` con `{ userName, password }`. Retorna `token` temporal y array de `clients`.
+   - **Cascada**: Consulta `GET /roles?client=X`, `GET /organizations?client=X&role=Y` y `GET /warehouses?client=X&role=Y&organization=Z`.
+   - **Paso 2**: `PUT /api/v1/auth/tokens` con cuerpo plano `{ clientId, roleId, organizationId, warehouseId, language }` y cabecera `Authorization: Bearer <tempToken>`. Retorna el token JWT operativo final.
+2. **Login Directo en 1 Paso**:
+   - `POST /api/v1/auth/tokens` con `{ userName, password, parameters: { clientId, roleId, organizationId, warehouseId, language } }`.
+
+---
+
+## 🌐 6. Conectividad y Bypass de CORS
+
+- **Proxy Local (`/api/idempiere-proxy?target=`) [POR DEFECTO]**: Envía peticiones server-to-server desde Express a iDempiere, inmune a directivas CORS del navegador y a bloqueos por falta de API keys de terceros (mitigación definitiva al error 403 `keyless_legacy_url` de corsproxy.io).
+- Opciones adicionales disponibles en el modal: Conexión directa y AllOrigins.
+
+---
+
+## ⚙️ 7. Comandos y Ciclos de Trabajo
 
 Todos los comandos raíz deben ejecutarse desde la raíz del proyecto (`d:/BDeveloper/rapidcorporate`):
 
@@ -71,67 +115,21 @@ npm run build:admin
 # 3. Compilación unificada y sincronización en server/public
 npm run build:all
 
-# 4. Iniciar servidor backend
-npm run server
-# o
+# 4. Iniciar servidor backend unificado
 npm start
+# o
+npm run server
 ```
-
----
-
-## 🛡️ 5. Capa de Datos: Patrón Resiliente Dual (MySQL + In-Memory)
-
-El archivo [`server/src/db.js`](file:///d:/BDeveloper/rapidcorporate/server/src/db.js) implementa un patrón de alta disponibilidad para entornos de demostración y desarrollo:
-
-1. **Detección Automática**: Comprueba variables de entorno (`DB_HOST` o `DATABASE_URL`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_PORT`).
-2. **Modo MySQL**: Si la conexión con MySQL es exitosa, inicializa las tablas (`products`) y opera con `mysql2/promise`.
-3. **Modo In-Memory (Fallback)**: Si MySQL no está configurado o falla la conexión en red (típico en despliegues tempranos o entornos locales sin base de datos), el sistema conmuta automáticamente a una base de datos en memoria sin interrumpir el servicio ni provocar caídas HTTP 500.
-
-> [!WARNING]
-> **Para Agentes IA**: Cualquier nuevo endpoint o mutación de datos que modifique `db.js` **debe mantener la paridad en ambos modos** (tanto en la consulta SQL como en el array / estructura en memoria).
-
----
-
-## 🌐 6. Estrategia de Conectividad y Bypass CORS con iDempiere ERP
-
-Para interactuar con la API REST de iDempiere desde el navegador sin ser bloqueados por directivas CORS, la plataforma incorpora un mecanismo multi-modo:
-
-1. **Opción 1: Sin Proxy (Conexión Directa)**: Útil cuando el servidor iDempiere expone encabezados CORS permisivos o el cliente corre sin restricciones de origen.
-2. **Opción 2: Proxy Local Backend (`/api/idempiere-proxy?target=`) [RECOMENDADO POR DEFECTO]**: El navegador envía la solicitud a nuestro propio backend Node.js Express, y este ejecuta la llamada server-to-server hacia iDempiere. Elimina al 100% los bloqueos CORS del navegador y es completamente inmune a fallos o cambios de políticas en servicios externos.
-3. **Opción 3: Proxy Público AllOrigins (`https://api.allorigins.win/raw?url=`)**: Alternativa libre sin API key.
-4. **Opción 4: Proxy corsproxy.io**: Anteriormente gratuito anónimo; actualmente requiere suscripción/API key registrada (`keyless_legacy_url` retorna HTTP 403). El sistema aplica fallback automático a Proxy Local cuando detecta este fallo.
-
----
-
-## 🐳 7. Despliegue en Dokploy / Docker Multi-Stage
-
-El archivo [`Dockerfile`](file:///d:/BDeveloper/rapidcorporate/Dockerfile) ejecuta 4 etapas:
-- **Etapa 1 (`builder-ecommerce`)**: Compila Astro hacia `/app/ecommerce/dist`.
-- **Etapa 2 (`builder-pwa`)**: Compila PWA hacia `/app/pwa/dist`.
-- **Etapa 3 (`builder-admin`)**: Compila React Admin hacia `/app/admin/dist`.
-- **Etapa 4 (`runner`)**: Imagen limpia `node:20-alpine`, copia dependencias de producción de `server`, copia las 3 carpetas `dist` hacia `server/public/*` e inicia con `node server/src/app.js` en el puerto `3000`.
 
 ---
 
 ## 📋 8. Normas de Actuación para Agentes de IA
 
-Cuando trabajes en este repositorio, debes cumplir estrictamente las siguientes reglas:
-
-1. **Actualización Continua de `AGENTS.md`**:
-   - Si creas un nuevo endpoint en `/api`, regístralo aquí.
-   - Si agregas una variable de entorno, anótala en la sección de configuración.
-   - Si agregas un paquete npm en cualquiera de los `package.json`, documenta la razón.
-2. **Respeto a las Rutas Base de Vite**:
-   - En `apps/admin`, nunca uses enlaces absolutos a la raíz `/` para assets internos; respeta `base: '/admin/'`.
-   - En `apps/pwa`, respeta `base: '/app/'`.
-3. **Validación tras Compilación**:
-   - Si realizas cambios en los frontends y se desea probar el servidor unificado, ejecuta `npm run build:all`.
-4. **Preservación de la Compatibilidad con Dokploy**:
-   - Mantén el puerto expuesto y la ruta `/api/health` intactos, ya que Dokploy y Docker los usan para verificar la salud del contenedor.
-5. **Creación de Documentos de Arquitectura**:
-   - Mantén al día [`ARCHITECTURE.md`](file:///d:/BDeveloper/rapidcorporate/ARCHITECTURE.md) cuando se introduzcan decisiones de diseño relevantes.
+1. **Regla de Oro de Documentación**: Siempre actualizar `AGENTS.md` y `ARCHITECTURE.md` al realizar cambios estructurales o añadir endpoints/modelos.
+2. **Respeto a Catálogo de Impuestos**: La tabla `taxes` (`C_Tax`) debe mantenerse como **Solo Lectura** en todas las vistas de usuario; no añadir funciones de mutación manual.
+3. **Respeto a las Rutas Base de Vite**: `apps/admin` debe compilar con `base: '/admin/'`, y `apps/pwa` con `base: '/app/'`.
+4. **Validación de Compilación**: Antes de dar por finalizada una tarea, verificar con `npm run build:all`.
 
 ---
 
-*Última actualización: Noviembre 2026 — Adición de endpoint /api/idempiere-proxy y selector multi-proxy para mitigación de 403 en corsproxy.io.*
-
+*Última actualización: Noviembre 2026 — Migración total a SQLite (better-sqlite3), implementación de autenticación en 2 pasos oficial con iDempiere ERP, sincronización de 6 catálogos maestros y vistas CRUD completas en Admin Panel.*
