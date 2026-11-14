@@ -129,6 +129,7 @@ npm run server
 2. **Respeto a Catálogo de Impuestos**: La tabla `taxes` (`C_Tax`) debe mantenerse como **Solo Lectura** en todas las vistas de usuario; no añadir funciones de mutación manual.
 3. **Respeto a las Rutas Base de Vite**: `apps/admin` debe compilar con `base: '/admin/'`, y `apps/pwa` con `base: '/app/'`.
 4. **Validación de Compilación**: Antes de dar por finalizada una tarea, verificar con `npm run build:all`.
+5. **Verificación Operativa Local Continua**: En cada interacción o respuesta al usuario, el agente debe verificar que la aplicación esté desplegada y respondiendo en `http://localhost:3000` (incluyendo `/api/health`, `/admin`, `/app` y `/`). Si el proceso no está corriendo, levantarlo en segundo plano como daemon con `npm start`.
 
 ---
 
